@@ -1,0 +1,52 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Template {
+  id        String      @id @default(cuid())
+  name      String
+  version   String      @default("1.0.0")
+  spec      Json        // TemplateSpec JSON
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  collections Collection[]
+}
+
+model Collection {
+  id          String    @id @default(cuid())
+  name        String
+  templateId  String
+  activeVer   String
+  settings    Json?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  template    Template  @relation(fields: [templateId], references: [id])
+  records     Record[]
+}
+
+model Record {
+  id           String     @id @default(cuid())
+  collectionId String
+  data         Json       // validated per TemplateSpec
+  computed     Json?
+
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  collection   Collection @relation(fields: [collectionId], references: [id])
+}
