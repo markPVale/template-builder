@@ -1,14 +1,19 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import TemplateList from "./_components/TemplateList";
 
 export default function HomePage() {
+  const router = useRouter();
+
   const [prompt, setPrompt] = useState("I need a budget tracker");
-  const [response, setResponse] = useState<any>(null);
+  const [response, setResponse] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
+
   const [seedLoading, setSeedLoading] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
-  const [seedCollectionId, setSeedCollectionId] = useState<string | null>(null);
+  const [showSeed, setShowSeed] = useState(true);
 
   const handleGenerate = async () => {
     setLoading(true);
@@ -19,14 +24,15 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt }),
       });
-      const json = await res.json();
 
-      // Redirect to the created collection
+      const json = await res.json().catch(() => null);
+
+      // If/when the assistant returns a created collection id, go straight there.
       if (res.ok && json?.collectionId) {
-        window.location.href = `/collections/${json.collectionId}`;
+        router.push(`/collections/${json.collectionId}`);
         return;
       }
-      
+
       setResponse(json);
     } catch (err) {
       console.error(err);
@@ -84,18 +90,26 @@ export default function HomePage() {
   };
 
   const handleSeedBudgetTracker = async () => {
+    if (seedLoading) return;
+
     setSeedLoading(true);
     setSeedError(null);
-    setSeedCollectionId(null);
+
     try {
       const templateRes = await fetch("/api/templates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: seedSpec.name, spec: seedSpec }),
       });
-      const templateJson = await templateRes.json();
+
+      const templateJson = await templateRes.json().catch(() => null);
       if (!templateRes.ok) {
         throw new Error(templateJson?.error || "Template creation failed");
+      }
+
+      const templateId = templateJson?.template?.id;
+      if (!templateId) {
+        throw new Error("Template creation succeeded but no template id returned");
       }
 
       const collectionRes = await fetch("/api/collections", {
@@ -103,15 +117,24 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: "Seed Budget Tracker",
-          templateId: templateJson.template.id,
+          templateId,
         }),
       });
-      const collectionJson = await collectionRes.json();
+
+      const collectionJson = await collectionRes.json().catch(() => null);
       if (!collectionRes.ok) {
         throw new Error(collectionJson?.error || "Collection creation failed");
       }
 
-      setSeedCollectionId(collectionJson.collection.id);
+      const collectionId = collectionJson?.collection?.id;
+      if (!collectionId) {
+        throw new Error(
+          "Collection creation succeeded but no collection id returned"
+        );
+      }
+
+      // Seed should behave like the primary UX: create + redirect.
+      router.push(`/collections/${collectionId}`);
     } catch (err) {
       console.error(err);
       setSeedError(err instanceof Error ? err.message : "Seed action failed");
@@ -131,6 +154,7 @@ export default function HomePage() {
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
         />
+
         <button
           onClick={handleGenerate}
           disabled={loading}
@@ -139,31 +163,39 @@ export default function HomePage() {
           {loading ? "Generating..." : "Generate TemplateSpec"}
         </button>
 
-        <div className="rounded border border-slate-800 bg-slate-900 p-4 space-y-2">
+        <div className="flex items-center justify-between">
           <div className="text-sm font-semibold">Seed Budget Tracker</div>
-          <p className="text-xs text-slate-300">
-            Creates a Template + Collection and links you to the collection
-            view.
-          </p>
-          <button
-            onClick={handleSeedBudgetTracker}
-            disabled={seedLoading}
-            className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm"
-          >
-            {seedLoading ? "Seeding..." : "Seed Budget Tracker"}
-          </button>
-          {seedError ? (
-            <div className="text-xs text-rose-400">{seedError}</div>
-          ) : null}
-          {seedCollectionId ? (
-            <a
-              className="text-xs text-emerald-300 underline"
-              href={`/collections/${seedCollectionId}`}
-            >
-              View collection {seedCollectionId}
-            </a>
-          ) : null}
+          <label className="text-xs flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={showSeed}
+              onChange={(e) => setShowSeed(e.target.checked)}
+            />
+            <span>Show seed</span>
+          </label>
         </div>
+
+        {showSeed ? (
+          <div className="rounded border border-slate-800 bg-slate-900 p-4 space-y-2">
+            <div className="text-xs text-slate-300">
+              Creates a Template + Collection and takes you to the collection view.
+            </div>
+
+            <button
+              onClick={handleSeedBudgetTracker}
+              disabled={seedLoading}
+              className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm"
+            >
+              {seedLoading ? "Seeding..." : "Seed Budget Tracker"}
+            </button>
+
+            {seedError ? (
+              <div className="text-xs text-rose-400">{seedError}</div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <TemplateList />
 
         <pre className="mt-4 text-xs bg-slate-900 border border-slate-800 rounded p-3 overflow-auto max-h-96">
           {response ? JSON.stringify(response, null, 2) : "// no response yet"}

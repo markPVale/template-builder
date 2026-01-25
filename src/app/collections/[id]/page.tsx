@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import type { TemplateSpec } from "@/lib/validation/template_spec";
@@ -47,55 +47,82 @@ export default function CollectionPage() {
     [collection]
   );
 
-  const loadCollection = async () => {
-    if (!collectionId) {
-      return;
-    }
+  const clearFieldError = (fieldId: string) => {
+    if (!validationErrors[fieldId]) return;
+    setValidationErrors((prev) => {
+      const next = { ...prev };
+      delete next[fieldId];
+      return next;
+    });
+  };
+
+  const updateField = (id: string, value: unknown) => {
+    setFormData((prev) => ({ ...prev, [id]: value }));
+    clearFieldError(id);
+  };
+
+  const loadCollection = useCallback(async (signal?: AbortSignal) => {
+    if (!collectionId) return;
+
     setLoading(true);
     setError(null);
+
     try {
       const [collectionRes, recordsRes] = await Promise.all([
-        fetch(`/api/collections?id=${collectionId}`),
-        fetch(`/api/records?collectionId=${collectionId}`),
+        fetch(`/api/collections?id=${collectionId}`, { signal }),
+        fetch(`/api/records?collectionId=${collectionId}`, { signal }),
       ]);
-      const collectionJson = await collectionRes.json();
-      const recordsJson = await recordsRes.json();
+
+      const collectionJson = await collectionRes.json().catch(() => null);
+      const recordsJson = await recordsRes.json().catch(() => null);
+
       if (!collectionRes.ok) {
         throw new Error(collectionJson?.error || "Failed to load collection");
       }
       if (!recordsRes.ok) {
         throw new Error(recordsJson?.error || "Failed to load records");
       }
+
       setCollection(collectionJson.collection);
       setRecords(recordsJson.records ?? []);
     } catch (err) {
+      // Ignore aborts
+      if (err instanceof DOMException && err.name === "AbortError") return;
       console.error(err);
       setError(err instanceof Error ? err.message : "Load failed");
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadCollection();
   }, [collectionId]);
 
-  const updateField = (id: string, value: unknown) => {
-    setFormData((prev) => ({ ...prev, [id]: value }));
-  };
+  useEffect(() => {
+    const controller = new AbortController();
+    loadCollection(controller.signal);
+    return () => controller.abort();
+  }, [loadCollection]);
 
   const handleCreateRecord = async () => {
-    if (!collectionId || saving) {
-      return;
-    }
+    if (!collectionId || saving) return;
 
-    // Validate required fields
+    // Client-side validation: required + number parsing
     const errors: Record<string, string> = {};
+
     for (const field of fields) {
+      const raw = formData[field.id];
+
+      // Required
       if (field.required) {
-        const raw = formData[field.id];
         if (raw === undefined || raw === "" || raw === null) {
           errors[field.id] = `${field.label || field.id} is required`;
+          continue;
+        }
+      }
+
+      // Number sanity (only validate if present)
+      if (field.type === "number" && raw !== undefined && raw !== "" && raw !== null) {
+        const numberValue = Number(raw);
+        if (Number.isNaN(numberValue)) {
+          errors[field.id] = `${field.label || field.id} must be a number`;
         }
       }
     }
@@ -108,37 +135,42 @@ export default function CollectionPage() {
     setSaving(true);
     setError(null);
     setValidationErrors({});
+
     try {
+      // Build payload with basic coercions
       const payload: Record<string, unknown> = {};
+
       for (const field of fields) {
         const raw = formData[field.id];
-        if (raw === undefined || raw === "") {
+
+        if (raw === undefined || raw === "" || raw === null) {
           continue;
         }
+
         if (field.type === "number") {
           const numberValue = Number(raw);
-          if (!Number.isNaN(numberValue)) {
-            payload[field.id] = numberValue;
-          }
+          if (!Number.isNaN(numberValue)) payload[field.id] = numberValue;
           continue;
         }
+
         if (field.type === "boolean") {
           payload[field.id] = Boolean(raw);
           continue;
         }
+
         payload[field.id] = raw;
       }
 
       const res = await fetch("/api/records", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          collectionId,
-          data: payload,
-        }),
+        body: JSON.stringify({ collectionId, data: payload }),
       });
-      const json = await res.json();
+
+      const json = await res.json().catch(() => null);
+
       if (!res.ok) {
+        // Server-side validation details mapping (your existing contract)
         if (Array.isArray(json?.details)) {
           const next: Record<string, string> = {};
           for (const d of json.details) {
@@ -149,6 +181,7 @@ export default function CollectionPage() {
         }
         throw new Error(json?.error || "Record creation failed");
       }
+
       setFormData({});
       setValidationErrors({});
       await loadCollection();
@@ -184,9 +217,7 @@ export default function CollectionPage() {
 
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold">{collection.name}</h1>
-        <div className="text-xs text-slate-300">
-          Collection ID: {collection.id}
-        </div>
+        <div className="text-xs text-slate-300">Collection ID: {collection.id}</div>
         <div className="text-xs text-slate-300">
           Template: {collection.template.name} (v{collection.template.version})
         </div>
@@ -202,38 +233,40 @@ export default function CollectionPage() {
 
         <div className="rounded border border-slate-800 bg-slate-900 p-4 space-y-3">
           <div className="text-sm font-semibold">Create Record</div>
+
           <div className="space-y-3">
             {fields.map((field) => {
               const value = formData[field.id];
+
+              const label = (
+                <span>
+                  {field.label || field.id}
+                  {field.required ? <span className="text-rose-400"> *</span> : null}
+                </span>
+              );
+
               if (field.type === "boolean") {
                 return (
-                  <label
-                    key={field.id}
-                    className="flex items-center gap-2 text-xs"
-                  >
+                  <label key={field.id} className="flex items-center gap-2 text-xs">
                     <input
                       type="checkbox"
                       checked={Boolean(value)}
                       onChange={(e) => updateField(field.id, e.target.checked)}
                     />
-                    <span>
-                      {field.label || field.id}
-                      {field.required && (
-                        <span className="text-rose-400"> *</span>
-                      )}
-                    </span>
+                    {label}
+                    {validationErrors[field.id] ? (
+                      <span className="text-rose-400 ml-2">
+                        {validationErrors[field.id]}
+                      </span>
+                    ) : null}
                   </label>
                 );
               }
+
               if (field.type === "select") {
                 return (
                   <label key={field.id} className="text-xs block space-y-1">
-                    <span>
-                      {field.label || field.id}
-                      {field.required && (
-                        <span className="text-rose-400"> *</span>
-                      )}
-                    </span>
+                    {label}
                     <select
                       className={`w-full rounded border p-2 ${
                         validationErrors[field.id]
@@ -241,16 +274,7 @@ export default function CollectionPage() {
                           : "border-slate-700 bg-slate-950"
                       }`}
                       value={(value as string) ?? ""}
-                      onChange={(e) => {
-                        updateField(field.id, e.target.value);
-                        if (validationErrors[field.id]) {
-                          setValidationErrors((prev) => {
-                            const next = { ...prev };
-                            delete next[field.id];
-                            return next;
-                          });
-                        }
-                      }}
+                      onChange={(e) => updateField(field.id, e.target.value)}
                     >
                       <option value="">Select...</option>
                       {field.options.map((option) => (
@@ -259,50 +283,41 @@ export default function CollectionPage() {
                         </option>
                       ))}
                     </select>
-                    {validationErrors[field.id] && (
-                      <span className="text-rose-400">
-                        {validationErrors[field.id]}
-                      </span>
-                    )}
+                    {validationErrors[field.id] ? (
+                      <span className="text-rose-400">{validationErrors[field.id]}</span>
+                    ) : null}
                   </label>
                 );
               }
+
+              const inputType =
+                field.type === "number"
+                  ? "number"
+                  : field.type === "date"
+                    ? "date"
+                    : "text";
+
               return (
                 <label key={field.id} className="text-xs block space-y-1">
-                  <span>
-                    {field.label || field.id}
-                    {field.required && (
-                      <span className="text-rose-400"> *</span>
-                    )}
-                  </span>
+                  {label}
                   <input
                     className={`w-full rounded border p-2 ${
                       validationErrors[field.id]
                         ? "border-rose-500 bg-rose-950/20"
                         : "border-slate-700 bg-slate-950"
                     }`}
-                    type={field.type === "number" ? "number" : "text"}
+                    type={inputType}
                     value={(value as string) ?? ""}
-                    onChange={(e) => {
-                      updateField(field.id, e.target.value);
-                      if (validationErrors[field.id]) {
-                        setValidationErrors((prev) => {
-                          const next = { ...prev };
-                          delete next[field.id];
-                          return next;
-                        });
-                      }
-                    }}
+                    onChange={(e) => updateField(field.id, e.target.value)}
                   />
-                  {validationErrors[field.id] && (
-                    <span className="text-rose-400">
-                      {validationErrors[field.id]}
-                    </span>
-                  )}
+                  {validationErrors[field.id] ? (
+                    <span className="text-rose-400">{validationErrors[field.id]}</span>
+                  ) : null}
                 </label>
               );
             })}
           </div>
+
           <button
             onClick={handleCreateRecord}
             disabled={saving}
@@ -310,12 +325,14 @@ export default function CollectionPage() {
           >
             {saving ? "Saving..." : "Create Record"}
           </button>
+
           {error ? <div className="text-xs text-rose-400">{error}</div> : null}
         </div>
       </section>
 
       <section className="rounded border border-slate-800 bg-slate-900 p-4 space-y-3">
         <div className="text-sm font-semibold">Records</div>
+
         {records.length === 0 ? (
           <div className="text-xs text-slate-300">No records yet.</div>
         ) : (
