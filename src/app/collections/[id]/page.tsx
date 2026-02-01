@@ -45,8 +45,9 @@ export default function CollectionPage() {
     Record<string, string>
   >({});
 
-  // NEW: view + debug state
+  // View + debug state
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  const [savingView, setSavingView] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
 
   const specViews = useMemo(() => {
@@ -58,12 +59,23 @@ export default function CollectionPage() {
     return specViews.find((v) => v.default) ?? specViews[0];
   }, [specViews]);
 
-  // Initialize active view once collection/spec is loaded
+  // Initialize active view from DB settings first, else fall back to default
   useEffect(() => {
-    if (!defaultView) return;
+    if (!collection) return;
     if (activeViewId) return;
-    setActiveViewId(defaultView.id);
-  }, [defaultView, activeViewId]);
+
+    const fromSettings =
+      (collection.settings as Record<string, unknown> | null)?.activeView;
+
+    if (typeof fromSettings === "string" && fromSettings.length > 0) {
+      setActiveViewId(fromSettings);
+      return;
+    }
+
+    if (defaultView) {
+      setActiveViewId(defaultView.id);
+    }
+  }, [collection, defaultView, activeViewId]);
 
   const activeView = useMemo(() => {
     if (!activeViewId) return null;
@@ -75,7 +87,7 @@ export default function CollectionPage() {
     [collection]
   );
 
-  // NEW: columns for table view
+  // Columns for table view
   const tableColumns = useMemo(() => {
     if (activeView?.type !== "table") return null;
     // If columns omitted, fall back to all fields
@@ -128,6 +140,15 @@ export default function CollectionPage() {
 
         setCollection(collectionJson.collection);
         setRecords(recordsJson.records ?? []);
+
+        // If server has a persisted activeView, align state (optional but helpful)
+        const fromSettings =
+          (collectionJson.collection?.settings as Record<string, unknown> | null)
+            ?.activeView;
+
+        if (typeof fromSettings === "string" && fromSettings.length > 0) {
+          setActiveViewId(fromSettings);
+        }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error(err);
@@ -144,6 +165,60 @@ export default function CollectionPage() {
     loadCollection(controller.signal);
     return () => controller.abort();
   }, [loadCollection]);
+
+  const persistActiveView = async (nextViewId: string) => {
+    if (!collectionId) return;
+    if (savingView) return;
+
+    const prev = activeViewId;
+    setActiveViewId(nextViewId); // optimistic
+    setSavingView(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/collections", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: collectionId, activeView: nextViewId }),
+      });
+
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        // rollback optimistic update
+        setActiveViewId(prev ?? null);
+
+        if (Array.isArray(json?.details)) {
+          const msg = json.details
+            .map((d: { message?: string }) => d?.message)
+            .filter(Boolean)
+            .join(", ");
+          throw new Error(msg || json?.error || "Failed to persist view");
+        }
+
+        throw new Error(json?.error || "Failed to persist view");
+      }
+
+      // Keep local settings in sync (recommended)
+      setCollection((curr) => {
+        if (!curr) return curr;
+        const priorSettings =
+          (curr.settings as Record<string, unknown> | null) ?? {};
+        return {
+          ...curr,
+          settings: {
+            ...priorSettings,
+            activeView: nextViewId,
+          },
+        };
+      });
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Failed to persist view");
+    } finally {
+      setSavingView(false);
+    }
+  };
 
   const handleCreateRecord = async () => {
     if (!collectionId || saving) return;
@@ -265,12 +340,14 @@ export default function CollectionPage() {
 
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold">{collection.name}</h1>
-        <div className="text-xs text-slate-300">Collection ID: {collection.id}</div>
+        <div className="text-xs text-slate-300">
+          Collection ID: {collection.id}
+        </div>
         <div className="text-xs text-slate-300">
           Template: {collection.template.name} (v{collection.template.version})
         </div>
 
-        {/* NEW: view switcher + debug toggle */}
+        {/* View switcher + debug toggle */}
         <div className="flex items-center justify-between pt-2">
           <div className="flex gap-2">
             {specViews.map((v) => {
@@ -278,12 +355,20 @@ export default function CollectionPage() {
               return (
                 <button
                   key={v.id}
-                  onClick={() => setActiveViewId(v.id)}
+                  onClick={() => persistActiveView(v.id)}
+                  disabled={savingView}
                   className={`text-xs px-2 py-1 rounded border ${
                     isActive
                       ? "bg-indigo-600 border-indigo-500"
                       : "bg-slate-900 border-slate-800 hover:bg-slate-800"
-                  }`}
+                  } ${savingView ? "opacity-60 cursor-not-allowed" : ""}`}
+                  title={
+                    savingView
+                      ? "Saving view..."
+                      : isActive
+                      ? "Active view"
+                      : "Switch view"
+                  }
                 >
                   {v.type}
                 </button>
@@ -302,7 +387,11 @@ export default function CollectionPage() {
         </div>
       </header>
 
-      {/* NEW: Debug only */}
+      {error ? (
+        <div className="text-xs text-rose-400">{error}</div>
+      ) : null}
+
+      {/* Debug only */}
       {showDebug ? (
         <section className="rounded border border-slate-800 bg-slate-900 p-4 space-y-2">
           <div className="text-sm font-semibold">Template Spec</div>
@@ -332,7 +421,10 @@ export default function CollectionPage() {
 
               if (field.type === "boolean") {
                 return (
-                  <label key={field.id} className="flex items-center gap-2 text-xs">
+                  <label
+                    key={field.id}
+                    className="flex items-center gap-2 text-xs"
+                  >
                     <input
                       type="checkbox"
                       checked={Boolean(value)}
@@ -369,7 +461,9 @@ export default function CollectionPage() {
                       ))}
                     </select>
                     {validationErrors[field.id] ? (
-                      <span className="text-rose-400">{validationErrors[field.id]}</span>
+                      <span className="text-rose-400">
+                        {validationErrors[field.id]}
+                      </span>
                     ) : null}
                   </label>
                 );
@@ -396,7 +490,9 @@ export default function CollectionPage() {
                     onChange={(e) => updateField(field.id, e.target.value)}
                   />
                   {validationErrors[field.id] ? (
-                    <span className="text-rose-400">{validationErrors[field.id]}</span>
+                    <span className="text-rose-400">
+                      {validationErrors[field.id]}
+                    </span>
                   ) : null}
                 </label>
               );
@@ -410,8 +506,6 @@ export default function CollectionPage() {
           >
             {saving ? "Saving..." : "Create Record"}
           </button>
-
-          {error ? <div className="text-xs text-rose-400">{error}</div> : null}
         </section>
       ) : null}
 
