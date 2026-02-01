@@ -64,8 +64,8 @@ export default function CollectionPage() {
     if (!collection) return;
     if (activeViewId) return;
 
-    const fromSettings =
-      (collection.settings as Record<string, unknown> | null)?.activeView;
+    const fromSettings = (collection.settings as Record<string, unknown> | null)
+      ?.activeView;
 
     if (typeof fromSettings === "string" && fromSettings.length > 0) {
       setActiveViewId(fromSettings);
@@ -84,8 +84,26 @@ export default function CollectionPage() {
 
   const fields = useMemo(
     () => collection?.template.spec.schema.fields ?? [],
-    [collection]
+    [collection],
   );
+
+  // Set default date values to today
+  useEffect(() => {
+    if (!fields.length) return;
+
+    const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+    const dateDefaults: Record<string, string> = {};
+
+    for (const field of fields) {
+      if (field.type === "date" && !formData[field.id]) {
+        dateDefaults[field.id] = today;
+      }
+    }
+
+    if (Object.keys(dateDefaults).length > 0) {
+      setFormData((prev) => ({ ...prev, ...dateDefaults }));
+    }
+  }, [fields, formData]);
 
   // Columns for table view
   const tableColumns = useMemo(() => {
@@ -142,9 +160,9 @@ export default function CollectionPage() {
         setRecords(recordsJson.records ?? []);
 
         // If server has a persisted activeView, align state (optional but helpful)
-        const fromSettings =
-          (collectionJson.collection?.settings as Record<string, unknown> | null)
-            ?.activeView;
+        const fromSettings = (
+          collectionJson.collection?.settings as Record<string, unknown> | null
+        )?.activeView;
 
         if (typeof fromSettings === "string" && fromSettings.length > 0) {
           setActiveViewId(fromSettings);
@@ -157,7 +175,7 @@ export default function CollectionPage() {
         setLoading(false);
       }
     },
-    [collectionId]
+    [collectionId],
   );
 
   useEffect(() => {
@@ -366,8 +384,8 @@ export default function CollectionPage() {
                     savingView
                       ? "Saving view..."
                       : isActive
-                      ? "Active view"
-                      : "Switch view"
+                        ? "Active view"
+                        : "Switch view"
                   }
                 >
                   {v.type}
@@ -387,9 +405,7 @@ export default function CollectionPage() {
         </div>
       </header>
 
-      {error ? (
-        <div className="text-xs text-rose-400">{error}</div>
-      ) : null}
+      {error ? <div className="text-xs text-rose-400">{error}</div> : null}
 
       {/* Debug only */}
       {showDebug ? (
@@ -473,8 +489,8 @@ export default function CollectionPage() {
                 field.type === "number"
                   ? "number"
                   : field.type === "date"
-                  ? "date"
-                  : "text";
+                    ? "date"
+                    : "text";
 
               return (
                 <label key={field.id} className="text-xs block space-y-1">

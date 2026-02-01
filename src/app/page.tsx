@@ -43,51 +43,131 @@ export default function HomePage() {
   };
 
   const seedSpec = {
-    name: "Seed Budget Tracker",
-    schema: {
-      fields: [
-        { id: "date", label: "Date", type: "date", required: true },
+  name: "Seed Budget Tracker",
+  schema: {
+    fields: [
+      { id: "date", label: "Date", type: "date", required: true },
+      {
+        id: "description",
+        label: "Description",
+        type: "string",
+        required: true,
+      },
+      {
+        id: "category",
+        label: "Category",
+        type: "select",
+        options: [
+          "Housing",
+          "Food",
+          "Transport",
+          "Utilities",
+          "Fun",
+          "Other",
+        ],
+      },
+      { id: "amount", label: "Amount", type: "number", required: true },
+      {
+        id: "type",
+        label: "Type",
+        type: "select",
+        options: ["Expense", "Income"],
+        required: true,
+      },
+      { id: "notes", label: "Notes", type: "string" },
+    ],
+    indexes: [["date"], ["category"]],
+  },
+
+  views: [
+    {
+      id: "form",
+      type: "form",
+      default: true,
+    },
+
+    {
+      id: "table",
+      type: "table",
+      columns: ["date", "description", "category", "amount", "type"],
+    },
+
+    /**
+     * SUMMARY VIEW
+     * "At a glance" metrics
+     */
+    {
+      id: "summary",
+      type: "summary",
+
+      timeFieldId: "date",
+      defaultTimeRange: { preset: "this_month" },
+
+      metrics: [
         {
-          id: "description",
-          label: "Description",
-          type: "string",
-          required: true,
-        },
-        {
-          id: "category",
-          label: "Category",
-          type: "select",
-          options: [
-            "Housing",
-            "Food",
-            "Transport",
-            "Utilities",
-            "Fun",
-            "Other",
+          id: "total_expenses",
+          label: "Total Expenses",
+          op: "sum",
+          fieldId: "amount",
+          format: "currency",
+          filters: [
+            { fieldId: "type", op: "eq", value: "Expense" },
           ],
         },
-        { id: "amount", label: "Amount", type: "number", required: true },
         {
-          id: "type",
-          label: "Type",
-          type: "select",
-          options: ["Expense", "Income"],
-          required: true,
+          id: "total_income",
+          label: "Total Income",
+          op: "sum",
+          fieldId: "amount",
+          format: "currency",
+          filters: [
+            { fieldId: "type", op: "eq", value: "Income" },
+          ],
         },
-        { id: "notes", label: "Notes", type: "string" },
+        {
+          id: "num_transactions",
+          label: "Transactions",
+          op: "count",
+        },
       ],
-      indexes: [["date"], ["category"]],
     },
-    views: [
-      { id: "form", type: "form", default: true },
-      {
-        id: "table",
-        type: "table",
-        columns: ["date", "description", "category", "amount", "type"],
-        default: true,
-      },
-    ],
-  };
+
+    /**
+     * CHART VIEW
+     * Category spend breakdown
+     */
+    {
+      id: "by_category",
+      type: "chart",
+
+      timeFieldId: "date",
+      defaultTimeRange: { preset: "this_month" },
+      interval: "month",
+
+      chartKind: "bar",
+
+      series: [
+        {
+          metric: {
+            id: "spend",
+            label: "Spend",
+            op: "sum",
+            fieldId: "amount",
+            format: "currency",
+            filters: [
+              { fieldId: "type", op: "eq", value: "Expense" },
+            ],
+          },
+          groupBy: {
+            fieldId: "category",
+            label: "Category",
+            sort: { metricId: "spend", dir: "desc" },
+          },
+        },
+      ],
+    },
+  ],
+};
 
   const handleSeedBudgetTracker = async () => {
     if (seedLoading) return;
