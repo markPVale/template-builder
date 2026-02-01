@@ -4,6 +4,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import type { TemplateSpec } from "@/lib/validation/template_spec";
+import type { TimeRange } from "@/lib/analytics/runtime";
+import SummaryView from "@/app/_components/views/SummaryView";
+import ChartView from "@/app/_components/views/ChartView";
+
+// Time range presets for the shared selector
+const TIME_RANGE_PRESETS: Array<{
+  label: string;
+  value: TimeRange;
+}> = [
+  { label: "All Time", value: { preset: "all_time" } },
+  { label: "This Month", value: { preset: "this_month" } },
+  { label: "Last Month", value: { preset: "last_month" } },
+  { label: "This Year", value: { preset: "this_year" } },
+];
 
 type CollectionResponse = {
   collection: {
@@ -50,6 +64,11 @@ export default function CollectionPage() {
   const [savingView, setSavingView] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
 
+  // Shared time range state (for summary/chart views)
+  const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange | null>(
+    null,
+  );
+
   const specViews = useMemo(() => {
     return collection?.template.spec.views ?? [];
   }, [collection]);
@@ -58,6 +77,15 @@ export default function CollectionPage() {
     if (!specViews.length) return null;
     return specViews.find((v) => v.default) ?? specViews[0];
   }, [specViews]);
+
+  const isSameTimeRange = (a: TimeRange | null, b: TimeRange | null) => {
+    if (!a || !b) return false;
+
+    if ("preset" in a && "preset" in b) return a.preset === b.preset;
+    if ("from" in a && "from" in b) return a.from === b.from && a.to === b.to;
+
+    return false;
+  };
 
   // Initialize active view from DB settings first, else fall back to default
   useEffect(() => {
@@ -81,6 +109,24 @@ export default function CollectionPage() {
     if (!activeViewId) return null;
     return specViews.find((v) => v.id === activeViewId) ?? null;
   }, [specViews, activeViewId]);
+
+  const showTimeRangeSelector =
+    activeView?.type === "summary" || activeView?.type === "chart";
+
+  useEffect(() => {
+    if (!activeView) return;
+
+    const isTimeView =
+      activeView.type === "summary" || activeView.type === "chart";
+    if (!isTimeView) return;
+
+    // Don't clobber user's selection
+    if (selectedTimeRange) return;
+
+    setSelectedTimeRange(
+      activeView.defaultTimeRange ?? { preset: "this_month" },
+    );
+  }, [activeView, selectedTimeRange]);
 
   const fields = useMemo(
     () => collection?.template.spec.schema.fields ?? [],
@@ -403,6 +449,34 @@ export default function CollectionPage() {
             <span>Debug</span>
           </label>
         </div>
+
+        {/* Time range selector (only for summary/chart views) */}
+        {showTimeRangeSelector ? (
+          <div className="flex items-center gap-2 pt-2">
+            <span className="text-xs text-slate-400">Time range:</span>
+            <div className="flex gap-1">
+              {TIME_RANGE_PRESETS.map((preset) => {
+                const isActive = isSameTimeRange(
+                  selectedTimeRange,
+                  preset.value,
+                );
+                return (
+                  <button
+                    key={preset.label}
+                    onClick={() => setSelectedTimeRange(preset.value)}
+                    className={`text-xs px-2 py-1 rounded border ${
+                      isActive
+                        ? "bg-indigo-600 border-indigo-500"
+                        : "bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
       </header>
 
       {error ? <div className="text-xs text-rose-400">{error}</div> : null}
@@ -563,6 +637,43 @@ export default function CollectionPage() {
             </div>
           )}
         </section>
+      ) : null}
+
+      {/* VIEW: SUMMARY */}
+      {activeView?.type === "summary" ? (
+        <SummaryView
+          specView={activeView}
+          records={records.map((r) => ({
+            data: r.data,
+            createdAt: r.createdAt,
+          }))}
+          fields={fields}
+          timeRange={selectedTimeRange}
+          totalRecordCount={records.length}
+          onSwitchToForm={() => {
+            const formView = specViews.find((v) => v.type === "form");
+            if (formView) persistActiveView(formView.id);
+          }}
+        />
+      ) : null}
+
+      {/* VIEW: CHART */}
+      {activeView?.type === "chart" ? (
+        <ChartView
+          specView={activeView}
+          records={records.map((r) => ({
+            data: r.data,
+            createdAt: r.createdAt,
+          }))}
+          fields={fields}
+          timeRange={selectedTimeRange}
+          totalRecordCount={records.length}
+          onSwitchToForm={() => {
+            const formView = specViews.find((v) => v.type === "form");
+            if (formView) persistActiveView(formView.id);
+          }}
+          onChangeTimeRange={setSelectedTimeRange}
+        />
       ) : null}
 
       {/* If a template has no views, give a helpful message */}
