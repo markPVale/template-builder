@@ -30,22 +30,64 @@ type RecordItem = {
 export default function CollectionPage() {
   const params = useParams<{ id: string }>();
   const collectionId = params?.id;
+
   const [collection, setCollection] = useState<
     CollectionResponse["collection"] | null
   >(null);
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [loading, setLoading] = useState(true);
+
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
   const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [validationErrors, setValidationErrors] = useState<
     Record<string, string>
   >({});
 
+  // NEW: view + debug state
+  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
+
+  const specViews = useMemo(() => {
+    return collection?.template.spec.views ?? [];
+  }, [collection]);
+
+  const defaultView = useMemo(() => {
+    if (!specViews.length) return null;
+    return specViews.find((v) => v.default) ?? specViews[0];
+  }, [specViews]);
+
+  // Initialize active view once collection/spec is loaded
+  useEffect(() => {
+    if (!defaultView) return;
+    if (activeViewId) return;
+    setActiveViewId(defaultView.id);
+  }, [defaultView, activeViewId]);
+
+  const activeView = useMemo(() => {
+    if (!activeViewId) return null;
+    return specViews.find((v) => v.id === activeViewId) ?? null;
+  }, [specViews, activeViewId]);
+
   const fields = useMemo(
     () => collection?.template.spec.schema.fields ?? [],
     [collection]
   );
+
+  // NEW: columns for table view
+  const tableColumns = useMemo(() => {
+    if (activeView?.type !== "table") return null;
+    // If columns omitted, fall back to all fields
+    return activeView.columns ?? fields.map((f) => f.id);
+  }, [activeView, fields]);
+
+  const visibleTableFields = useMemo(() => {
+    if (!tableColumns) return [];
+    const allow = new Set(tableColumns);
+    // Only show columns that exist in schema (ignore unknown)
+    return fields.filter((f) => allow.has(f.id));
+  }, [fields, tableColumns]);
 
   const clearFieldError = (fieldId: string) => {
     if (!validationErrors[fieldId]) return;
@@ -61,39 +103,41 @@ export default function CollectionPage() {
     clearFieldError(id);
   };
 
-  const loadCollection = useCallback(async (signal?: AbortSignal) => {
-    if (!collectionId) return;
+  const loadCollection = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!collectionId) return;
 
-    setLoading(true);
-    setError(null);
+      setLoading(true);
+      setError(null);
 
-    try {
-      const [collectionRes, recordsRes] = await Promise.all([
-        fetch(`/api/collections?id=${collectionId}`, { signal }),
-        fetch(`/api/records?collectionId=${collectionId}`, { signal }),
-      ]);
+      try {
+        const [collectionRes, recordsRes] = await Promise.all([
+          fetch(`/api/collections?id=${collectionId}`, { signal }),
+          fetch(`/api/records?collectionId=${collectionId}`, { signal }),
+        ]);
 
-      const collectionJson = await collectionRes.json().catch(() => null);
-      const recordsJson = await recordsRes.json().catch(() => null);
+        const collectionJson = await collectionRes.json().catch(() => null);
+        const recordsJson = await recordsRes.json().catch(() => null);
 
-      if (!collectionRes.ok) {
-        throw new Error(collectionJson?.error || "Failed to load collection");
+        if (!collectionRes.ok) {
+          throw new Error(collectionJson?.error || "Failed to load collection");
+        }
+        if (!recordsRes.ok) {
+          throw new Error(recordsJson?.error || "Failed to load records");
+        }
+
+        setCollection(collectionJson.collection);
+        setRecords(recordsJson.records ?? []);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error(err);
+        setError(err instanceof Error ? err.message : "Load failed");
+      } finally {
+        setLoading(false);
       }
-      if (!recordsRes.ok) {
-        throw new Error(recordsJson?.error || "Failed to load records");
-      }
-
-      setCollection(collectionJson.collection);
-      setRecords(recordsJson.records ?? []);
-    } catch (err) {
-      // Ignore aborts
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      console.error(err);
-      setError(err instanceof Error ? err.message : "Load failed");
-    } finally {
-      setLoading(false);
-    }
-  }, [collectionId]);
+    },
+    [collectionId]
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -119,7 +163,12 @@ export default function CollectionPage() {
       }
 
       // Number sanity (only validate if present)
-      if (field.type === "number" && raw !== undefined && raw !== "" && raw !== null) {
+      if (
+        field.type === "number" &&
+        raw !== undefined &&
+        raw !== "" &&
+        raw !== null
+      ) {
         const numberValue = Number(raw);
         if (Number.isNaN(numberValue)) {
           errors[field.id] = `${field.label || field.id} must be a number`;
@@ -170,7 +219,6 @@ export default function CollectionPage() {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        // Server-side validation details mapping (your existing contract)
         if (Array.isArray(json?.details)) {
           const next: Record<string, string> = {};
           for (const d of json.details) {
@@ -221,17 +269,52 @@ export default function CollectionPage() {
         <div className="text-xs text-slate-300">
           Template: {collection.template.name} (v{collection.template.version})
         </div>
+
+        {/* NEW: view switcher + debug toggle */}
+        <div className="flex items-center justify-between pt-2">
+          <div className="flex gap-2">
+            {specViews.map((v) => {
+              const isActive = v.id === activeViewId;
+              return (
+                <button
+                  key={v.id}
+                  onClick={() => setActiveViewId(v.id)}
+                  className={`text-xs px-2 py-1 rounded border ${
+                    isActive
+                      ? "bg-indigo-600 border-indigo-500"
+                      : "bg-slate-900 border-slate-800 hover:bg-slate-800"
+                  }`}
+                >
+                  {v.type}
+                </button>
+              );
+            })}
+          </div>
+
+          <label className="text-xs flex items-center gap-2 text-slate-300">
+            <input
+              type="checkbox"
+              checked={showDebug}
+              onChange={(e) => setShowDebug(e.target.checked)}
+            />
+            <span>Debug</span>
+          </label>
+        </div>
       </header>
 
-      <section className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded border border-slate-800 bg-slate-900 p-4 space-y-2">
+      {/* NEW: Debug only */}
+      {showDebug ? (
+        <section className="rounded border border-slate-800 bg-slate-900 p-4 space-y-2">
           <div className="text-sm font-semibold">Template Spec</div>
           <pre className="text-xs bg-slate-950 border border-slate-800 rounded p-3 overflow-auto max-h-96">
             {JSON.stringify(collection.template.spec, null, 2)}
           </pre>
-        </div>
+        </section>
+      ) : null}
 
-        <div className="rounded border border-slate-800 bg-slate-900 p-4 space-y-3">
+      {/* VIEW: FORM */}
+      {activeView?.type === "form" ? (
+        <section className="rounded border border-slate-800 bg-slate-900 p-4 space-y-3">
           <div className="text-sm font-semibold">Create Record</div>
 
           <div className="space-y-3">
@@ -241,7 +324,9 @@ export default function CollectionPage() {
               const label = (
                 <span>
                   {field.label || field.id}
-                  {field.required ? <span className="text-rose-400"> *</span> : null}
+                  {field.required ? (
+                    <span className="text-rose-400"> *</span>
+                  ) : null}
                 </span>
               );
 
@@ -294,8 +379,8 @@ export default function CollectionPage() {
                 field.type === "number"
                   ? "number"
                   : field.type === "date"
-                    ? "date"
-                    : "text";
+                  ? "date"
+                  : "text";
 
               return (
                 <label key={field.id} className="text-xs block space-y-1">
@@ -327,45 +412,57 @@ export default function CollectionPage() {
           </button>
 
           {error ? <div className="text-xs text-rose-400">{error}</div> : null}
-        </div>
-      </section>
+        </section>
+      ) : null}
 
-      <section className="rounded border border-slate-800 bg-slate-900 p-4 space-y-3">
-        <div className="text-sm font-semibold">Records</div>
+      {/* VIEW: TABLE */}
+      {activeView?.type === "table" ? (
+        <section className="rounded border border-slate-800 bg-slate-900 p-4 space-y-3">
+          <div className="text-sm font-semibold">Records</div>
 
-        {records.length === 0 ? (
-          <div className="text-xs text-slate-300">No records yet.</div>
-        ) : (
-          <div className="overflow-auto">
-            <table className="w-full text-xs border-collapse">
-              <thead>
-                <tr className="text-left border-b border-slate-800">
-                  {fields.map((field) => (
-                    <th key={field.id} className="py-2 pr-4">
-                      {field.label || field.id}
-                    </th>
-                  ))}
-                  <th className="py-2 pr-4">Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {records.map((record) => (
-                  <tr key={record.id} className="border-b border-slate-800">
-                    {fields.map((field) => (
-                      <td key={field.id} className="py-2 pr-4">
-                        {String(record.data?.[field.id] ?? "")}
-                      </td>
+          {records.length === 0 ? (
+            <div className="text-xs text-slate-300">No records yet.</div>
+          ) : (
+            <div className="overflow-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="text-left border-b border-slate-800">
+                    {visibleTableFields.map((field) => (
+                      <th key={field.id} className="py-2 pr-4">
+                        {field.label || field.id}
+                      </th>
                     ))}
-                    <td className="py-2 pr-4">
-                      {new Date(record.createdAt).toLocaleString()}
-                    </td>
+                    <th className="py-2 pr-4">Created</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {records.map((record) => (
+                    <tr key={record.id} className="border-b border-slate-800">
+                      {visibleTableFields.map((field) => (
+                        <td key={field.id} className="py-2 pr-4">
+                          {String(record.data?.[field.id] ?? "")}
+                        </td>
+                      ))}
+                      <td className="py-2 pr-4">
+                        {new Date(record.createdAt).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {/* If a template has no views, give a helpful message */}
+      {!activeView ? (
+        <section className="rounded border border-slate-800 bg-slate-900 p-4">
+          <div className="text-xs text-rose-400">
+            This template has no views configured in spec.views.
           </div>
-        )}
-      </section>
+        </section>
+      ) : null}
     </main>
   );
 }

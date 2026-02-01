@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import type { TemplateSpec as TemplateSpecType } from "@/lib/validation/template_spec";
+import { Prisma } from "@/generated/prisma/browser";
 
 type ValidationDetail = { field: string; message: string };
 
@@ -178,7 +179,7 @@ function validateAndNormalizeRecordData(
       default: {
         // Exhaustiveness (should never hit)
         details.push({
-          field: field.id,
+          field: "_unknown",
           message: `Unsupported field type`,
         });
       }
@@ -241,7 +242,7 @@ export async function POST(req: NextRequest) {
   const record = await prisma.record.create({
     data: {
       collectionId: body.collectionId,
-      data: validated.data,
+      data: validated.data as Prisma.InputJsonValue,
     },
   });
 
